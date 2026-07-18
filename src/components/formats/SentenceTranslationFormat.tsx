@@ -20,7 +20,10 @@ interface SentenceQ {
   tokens: { text: string; translation: string | null; isBlank: boolean; showTranslation: boolean }[];
 }
 
-const DIFF3_MASTERY = 3;
+// Per the spec: "all words with some mastery equal to the requirement to reach
+// difficulty 3 have their bracket translations removed." Difficulty 3 = L3
+// formats, which unlock at mastery 0.50 on the new continuous scale.
+const DIFF3_MASTERY = 0.50;
 
 function findLessonWordMatch(
   text: string,
@@ -103,10 +106,15 @@ export default function SentenceTranslationFormat({
       const blankCandidates = tokenMatches.filter((t) => t.state && t.state.seen);
       if (blankCandidates.length < 2) continue; // need at least 2 seen tokens to blank
       // Sentence Translation: MORE blanks than sentence comprehension.
-      // nBlanks: 2-5, scaling with mastery
+      // nBlanks: 2-5, scaling with mastery on the continuous [0,1] scale.
+      //   mastery < 0.25 → 3 blanks
+      //   mastery < 0.50 → 4 blanks
+      //   mastery < 0.75 → 4 blanks
+      //   mastery >= 0.75 → 5 blanks
+      // (Capped at 5 — matches the original cap.)
       const nBlanks = Math.min(
         Math.max(2, blankCandidates.length),
-        Math.min(5, 3 + Math.floor(mastery / 2))
+        mastery >= 0.75 ? 5 : mastery >= 0.25 ? 4 : 3
       );
       const nDistractors = distractorCount(mastery) + 1; // slightly more distractors
 

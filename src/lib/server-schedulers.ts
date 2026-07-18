@@ -1,6 +1,7 @@
 import { WordState } from "./types";
 import { sm2Update } from "./sm2";
 import { fsrs5Update } from "./fsrs5";
+import { MASTERY_THRESHOLDS } from "./session";
 import type { Prisma } from "@prisma/client";
 
 /**
@@ -76,7 +77,7 @@ export function introduceWordServer(state: WordState): WordState {
   return {
     ...state,
     seen: true,
-    mastery: 1,
+    mastery: MASTERY_THRESHOLDS[1], // 0.10 — L1 boundary (matches introduceWord in session.ts)
     introducedAt: now,
     lastReviewed: now,
   };
@@ -85,7 +86,9 @@ export function introduceWordServer(state: WordState): WordState {
 /**
  * Apply a review result via the lesson's configured algorithm.
  *
- * Mirrors `applyAlgorithmResult` from session.ts, but intended for server-side
+ * Mirrors `applyAlgorithmResult` from session.ts, including the post-review
+ * mastery floor (a seen word with < 2 total reviews keeps mastery >= L1
+ * threshold so it stays eligible for L1 formats). Intended for server-side
  * use where we already have the algorithm string and the WordState object.
  */
 export function applyReview(
@@ -93,6 +96,13 @@ export function applyReview(
   quality: number,
   algorithm: string
 ): WordState {
-  if (algorithm === "FSRS-5") return fsrs5Update(state, quality);
-  return sm2Update(state, quality);
+  const next = algorithm === "FSRS-5"
+    ? fsrs5Update(state, quality)
+    : sm2Update(state, quality);
+
+  // Post-review mastery floor (mirrors applyAlgorithmResult in session.ts).
+  if (next.seen && next.totalReviews < 2) {
+    next.mastery = Math.max(next.mastery, MASTERY_THRESHOLDS[1]);
+  }
+  return next;
 }

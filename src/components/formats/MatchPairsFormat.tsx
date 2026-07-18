@@ -24,12 +24,12 @@ export default function MatchPairsFormat({
   onResult,
   onDone,
 }: FormatComponentProps) {
+  // Avg mastery is now a continuous value in [0, 1]. Pass it directly to
+  // nForMastery — the helper handles the [0,1] mapping.
   const avgMastery =
     eligibleWords.length === 0
-      ? 1
-      : Math.round(
-          eligibleWords.reduce((s, w) => s + w.state.mastery, 0) / eligibleWords.length
-        );
+      ? 0
+      : eligibleWords.reduce((s, w) => s + w.state.mastery, 0) / eligibleWords.length;
   const nPairs = nForMastery(avgMastery, 6);
 
   const matchQ = useMemo<MatchQ | null>(() => {

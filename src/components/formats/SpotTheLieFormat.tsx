@@ -31,8 +31,9 @@ export default function SpotTheLieFormat({
     const eligibleWordEntries = eligibleWords.map((ew) => ew.word);
     while (out.length < numQuestions && attempts < numQuestions * 6) {
       attempts++;
-      const avgMastery = eligibleWords.length === 0 ? 1 :
-        Math.round(eligibleWords.reduce((s, w) => s + w.state.mastery, 0) / eligibleWords.length);
+      // Avg mastery is now a continuous value in [0, 1] — pass directly.
+      const avgMastery = eligibleWords.length === 0 ? 0 :
+        eligibleWords.reduce((s, w) => s + w.state.mastery, 0) / eligibleWords.length;
       const n = nForMastery(avgMastery, 6);
       const built = buildSpotTheLie(eligibleWordEntries, n);
       if (built) {

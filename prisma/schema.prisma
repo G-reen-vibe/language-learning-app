@@ -17,7 +17,12 @@ model Lesson {
   // Algorithm + daily-new-word config are per-lesson (matches LessonSettings type)
   algorithm               String  @default("FSRS-5") // "SM-2" | "FSRS-5"
   maxNewWordsPerDay       Int     @default(10)
-  minMasteryForNewWords   Int     @default(2)
+  // Mastery is now a continuous value in [0, 1] (mirrors the Flashcards app's
+  // scheduler.mastery() formula: r * confidence * (0.5 + 0.5 * stabilityMaturity)).
+  // The default of 0.10 reflects the minMasteryForNewWords setting: existing
+  // words must reach 0.10 (~ "introduced, one positive review") before new
+  // words are introduced.
+  minMasteryForNewWords   Float   @default(0.10)
   // Daily new-word counter; reset to 0 when lastStudyDate != today (in client
   // study-view initializer, exactly as the localStorage version did)
   newWordsIntroducedToday Int     @default(0)
@@ -89,7 +94,11 @@ model WordState {
   difficulty    Float    @default(5) // 1..10
 
   // Common
-  mastery       Int      @default(0) // 0..5 (0 = never seen)
+  // Mastery is now a continuous value in [0, 1] (mirrors the Flashcards app):
+  //   r * confidence * (0.5 + 0.5 * stabilityMaturity)
+  // where r = retrievability today, confidence = min(1, reviews/8), and
+  // stabilityMaturity = tanh(log1p(stabilityDays) / 3.5). 0 = never seen.
+  mastery       Float    @default(0) // 0..1 (0 = never seen)
   seen          Boolean  @default(false)
   introducedAt  DateTime?
   totalReviews  Int      @default(0)

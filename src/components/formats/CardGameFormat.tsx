@@ -35,11 +35,11 @@ export default function CardGameFormat({
 
   const setup = useMemo(() => {
     if (eligibleWords.length === 0) return null;
-    // Use the max mastery among eligible words to determine N — this matches
-    // the previous behavior where each word's own mastery scaled N.
+    // Use the max mastery among eligible words to determine N.
+    // N scales {4, 6, 9} with mastery — mastery >= 0.90 → 9, else 4.
+    // (Keeps the same {4, 9} tiers as before, just on the continuous scale.)
     const maxMastery = Math.max(...eligibleWords.map((ew) => ew.state.mastery));
-    // N scales {4, 6, 9} with mastery: mastery 4 -> 4, mastery 5 -> 9
-    const targetN = maxMastery >= 5 ? 9 : 4;
+    const targetN = maxMastery >= 0.90 ? 9 : 4;
     const eligibleWordEntries = eligibleWords.map((ew) => ew.word);
     // pickGameItems picks ONE ASPECT PER WORD so each card represents a
     // different concept. Returns null if there aren't enough eligible words

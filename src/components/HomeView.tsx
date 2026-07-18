@@ -498,7 +498,9 @@ function LessonCard({
     const states = Object.values(lesson.wordStates);
     const total = lesson.words.length;
     const seen = states.filter((s) => s.seen).length;
-    const mastered = states.filter((s) => s.mastery >= 5).length;
+    // "Mastered" = mastery >= 0.90 (top of the continuous scale).
+    const mastered = states.filter((s) => s.mastery >= 0.90).length;
+    // avgMastery is now continuous [0,1].
     const avgMastery =
       states.length > 0 ? states.reduce((s, w) => s + w.mastery, 0) / states.length : 0;
     const totalReviews = states.reduce((s, w) => s + w.totalReviews, 0);
@@ -509,7 +511,8 @@ function LessonCard({
     return { total, seen, mastered, avgMastery, totalReviews, lastSession };
   }, [lesson]);
 
-  const masteryPct = Math.round((stats.avgMastery / 5) * 100);
+  // Mastery is continuous [0,1] — convert directly to a percentage.
+  const masteryPct = Math.round(stats.avgMastery * 100);
   const progressPct = stats.total > 0 ? Math.round((stats.seen / stats.total) * 100) : 0;
 
   return (

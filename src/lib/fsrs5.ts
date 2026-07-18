@@ -1,4 +1,5 @@
 import { WordState } from "./types";
+import { fsrsMastery, cardStateFromWordState } from "./mastery";
 
 /**
  * FSRS-5 (Free Spaced Repetition Scheduler) — simplified standalone implementation.
@@ -22,13 +23,10 @@ import { WordState } from "./types";
  *
  *   Next interval = round(S * request_retention) → here we use S directly as days.
  *
- * Mastery mapping:
- *   0 = never seen
- *   1 = S >= 0.4 (introduced)
- *   2 = S >= 2
- *   3 = S >= 6
- *   4 = S >= 21
- *   5 = S >= 60
+ * Mastery is now computed from the post-update state using the Flashcards
+ * app's FSRS mastery formula (see `./mastery.ts::fsrsMastery`). This produces
+ * a smooth, continuous value in [0, 1] that doesn't swing wildly on a
+ * single correct/wrong answer.
  *
  * Quality → grade mapping (we receive a 0..5 quality):
  *   q<3 → 1 (Again)  — also covers blackout
@@ -115,37 +113,16 @@ export function fsrs5Update(state: WordState, quality: number): WordState {
   const interval = Math.max(1, Math.round(stability));
   const nextReview = now + interval * 24 * 60 * 60 * 1000;
 
-  // Mastery — same stability-oriented mapping as SM-2:
-  //  - Each positive review bumps mastery by 1 (steady visible progress).
-  //  - Stability tier acts as a floor.
-  //  - Lapse drops mastery by 1 (not collapse to 1).
-  let mastery = state.mastery;
-  if (g >= 2) {
-    const stabilityTier =
-      stability >= 60 ? 5
-      : stability >= 21 ? 4
-      : stability >= 6 ? 3
-      : stability >= 2 ? 2
-      : 1;
-    mastery = Math.max(state.mastery + 1, stabilityTier);
-    if (!state.seen) mastery = Math.max(mastery, 1);
-    mastery = Math.min(5, mastery);
-  } else {
-    // lapse — drop by 1, not collapse to 1.
-    if (!state.seen) mastery = 1;
-    else mastery = Math.max(1, state.mastery - 1);
-  }
-
   // Set introducedAt on first successful review
   const introducedAt = (!state.seen && g >= 2) ? now : state.introducedAt;
 
-  return {
+  const next: WordState = {
     ...state,
     stability,
     difficulty,
     lastReviewed: now,
     nextReview,
-    mastery,
+    mastery: 0, // set below
     seen: true,
     introducedAt,
     totalReviews: state.totalReviews + 1,
@@ -154,4 +131,9 @@ export function fsrs5Update(state: WordState, quality: number): WordState {
     interval,
     repetitions: g >= 2 ? state.repetitions + 1 : 0,
   };
+
+  const cardState = cardStateFromWordState(next);
+  next.mastery = fsrsMastery(cardState, next.stability, next.lastReviewed, next.totalReviews, now);
+
+  return next;
 }

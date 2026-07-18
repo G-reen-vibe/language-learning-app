@@ -46,7 +46,10 @@ const WordStateSchema = z.object({
   nextReview: z.number().optional(),
   stability: z.number().default(0),
   difficulty: z.number().default(5),
-  mastery: z.number().default(0),
+  // Mastery is now continuous [0,1]. Old imports with integer 0..5 values
+  // would still validate (they're numbers), but the values are stale — the
+  // first review will recompute via the Flashcards formula.
+  mastery: z.number().min(0).max(1).default(0),
   seen: z.boolean().default(false),
   introducedAt: z.number().nullable().optional(),
   totalReviews: z.number().default(0),
@@ -74,8 +77,9 @@ const LessonSchema = z.object({
   settings: z.object({
     algorithm: z.enum(["SM-2", "FSRS-5"]).default("FSRS-5"),
     maxNewWordsPerDay: z.number().int().min(1).max(100).default(10),
-    minMasteryForNewWords: z.number().int().min(1).max(5).default(2),
-  }).default({ algorithm: "FSRS-5", maxNewWordsPerDay: 10, minMasteryForNewWords: 2 }),
+    // Mastery is now continuous [0,1]. Default 0.10 = L1 boundary.
+    minMasteryForNewWords: z.number().min(0).max(1).default(0.10),
+  }).default({ algorithm: "FSRS-5", maxNewWordsPerDay: 10, minMasteryForNewWords: 0.10 }),
   wordStates: z.record(z.string(), WordStateSchema).default({}),
   sessions: z.array(SessionRecordSchema).default([]),
   newWordsIntroducedToday: z.number().default(0),

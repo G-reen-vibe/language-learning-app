@@ -42,7 +42,8 @@ const PatchSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   algorithm: z.enum(["SM-2", "FSRS-5"]).optional(),
   maxNewWordsPerDay: z.number().int().min(1).max(100).optional(),
-  minMasteryForNewWords: z.number().int().min(1).max(5).optional(),
+  // Mastery is now continuous [0,1].
+  minMasteryForNewWords: z.number().min(0).max(1).optional(),
 });
 
 export async function PATCH(req: NextRequest, { params }: RouteParams) {

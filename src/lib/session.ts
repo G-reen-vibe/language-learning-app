@@ -12,10 +12,35 @@ import { fsrs5Update } from "./fsrs5";
 import { todayStr as todayStrLocal } from "./storage";
 
 // ----- Mastery threshold helpers -----
+//
+// Mastery is now a continuous value in [0, 1] (see ./mastery.ts). The format
+// difficulty tier constants below map each FormatType to a mastery THRESHOLD
+// rather than an integer tier. These thresholds mirror the Flashcards app's
+// `maxLevelForMastery` boundaries so the per-format unlock cadence matches:
+//
+//   diff 0 (introduction) → 0.00  — never-seen words only
+//   diff 1 (L1: pick, lie) → 0.10 — introduced (one positive review)
+//   diff 2 (L2: match, scramble) → 0.25
+//   diff 3 (L3: fill, sentence*) → 0.50
+//   diff 4 (L4: shell, card, marble — games) → 0.75
+//
+// NOTE: per the task spec, the format tiers themselves are UNCHANGED —
+// introduction is still tier 0, L1 formats are still tier 1, all games
+// (shell/card/marble) are still the highest tier (tier 4). Only the mastery
+// *threshold* required to unlock each tier has been re-expressed on the new
+// continuous scale.
+
+export const MASTERY_THRESHOLDS: Record<number, number> = {
+  0: 0.0,   // introduction — never-seen words (special-cased below)
+  1: 0.10,  // L1 formats
+  2: 0.25,  // L2 formats
+  3: 0.50,  // L3 formats
+  4: 0.75,  // L4 formats (all games)
+};
 
 /**
  * For diff-0 (introduction), eligible words are those NEVER seen (mastery 0, !seen).
- * For diff>=1, eligible words are those with mastery >= diff.
+ * For diff>=1, eligible words are those with mastery >= MASTERY_THRESHOLDS[diff].
  */
 export function eligibleWordsForFormat(
   lesson: Lesson,
@@ -31,7 +56,8 @@ export function eligibleWordsForFormat(
       // never seen
       if (!s.seen && s.mastery === 0) out.push({ word: w, state: s });
     } else {
-      if (s.mastery >= diff) out.push({ word: w, state: s });
+      const threshold = MASTERY_THRESHOLDS[diff] ?? 0;
+      if (s.mastery >= threshold) out.push({ word: w, state: s });
     }
   }
   return out;
@@ -394,18 +420,43 @@ export const RUSH_DURATION_SEC = 5 * 60;
 export const RUSH_LIVES = 3;
 
 /**
- * Mark a word as "introduced" — seen for the first time.
+ * Mark a word as "introduced" — seen for the first time via an Introduction card.
  * This does NOT run the spaced repetition algorithm (no review happened).
- * Sets seen=true, mastery=1, introducedAt=now, lastReviewed=now.
+ *
+ * Sets seen=true, mastery to the "introduced" threshold (0.10 — matches the
+ * L1 mastery boundary so the word immediately unlocks L1 formats but nothing
+ * higher), introducedAt=now, lastReviewed=now.
+ *
  * Algorithm fields (ease, stability, difficulty, interval, repetitions) keep
  * their default fresh values and will be updated on the first real review.
+ *
+ * Why a constant floor instead of computing mastery via the Flashcards formula?
+ * The Flashcards formula is `r * confidence * (0.5 + 0.5 * stabilityMaturity)`.
+ * For a brand-new word just introduced, all three factors are 0 (no reviews,
+ * no stability), so the formula returns 0. But the user has clearly "seen"
+ * the word now (the Introduction card showed both sides), so we floor it at
+ * the L1 boundary to make the word eligible for L1 formats immediately.
+ *
+ * On the first real review (L1 format), the scheduler recomputes mastery via
+ * the natural formula and the value becomes `r * 0.125 * (0.5 + 0.5 * 0.18)`
+ * ≈ 0.067 — below the L1 threshold. To prevent a freshly-introduced word
+ * from being "un-eligible" for L1 immediately after its first review, we
+ * also floor post-review mastery at 0.10 when the word has been seen but
+ * has fewer than 2 reviews. This matches the Flashcards app's behavior
+ * where a card in LEARNING (interval=0) still gets `0.2 * confidence`
+ * mastery (which is 0.025 for 1 review — also below 0.10), and the
+ * sampler.ts uses `card.mastery < 0.02` (not 0.10) as the "brand new"
+ * cutoff precisely for this reason.
+ *
+ * Translating to this app: we floor at 0.10 on the first review so the
+ * word stays L1-eligible, then let the natural formula take over.
  */
 export function introduceWord(state: WordState): WordState {
   const now = Date.now();
   return {
     ...state,
     seen: true,
-    mastery: 1,
+    mastery: MASTERY_THRESHOLDS[1], // 0.10 — L1 boundary
     introducedAt: now,
     lastReviewed: now,
   };
@@ -419,9 +470,20 @@ export function applyAlgorithmResult(
 ): WordState | undefined {
   const s = lesson.wordStates[wordKey];
   if (!s) return undefined;
-  if (lesson.settings.algorithm === "FSRS-5") {
-    return fsrs5Update(s, quality);
-  } else {
-    return sm2Update(s, quality);
+  const next = lesson.settings.algorithm === "FSRS-5"
+    ? fsrs5Update(s, quality)
+    : sm2Update(s, quality);
+
+  // Post-review mastery floor: a seen word with < 2 total reviews is still
+  // "freshly introduced" — keep its mastery at or above the L1 threshold so
+  // it stays eligible for L1 formats. Without this floor, the Flashcards
+  // mastery formula would return ~0.067 after the first review (below the
+  // 0.10 L1 threshold), un-eligibling the word from all quiz formats and
+  // stranding it until its stability grows enough to push mastery back
+  // above 0.10. This mirrors the Flashcards sampler's `< 0.02` brand-new
+  // cutoff, which exists for exactly the same reason.
+  if (next.seen && next.totalReviews < 2) {
+    next.mastery = Math.max(next.mastery, MASTERY_THRESHOLDS[1]);
   }
+  return next;
 }

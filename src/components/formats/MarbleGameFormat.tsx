@@ -59,11 +59,11 @@ export default function MarbleGameFormat({
   // called.
   const setup = useMemo(() => {
     if (eligibleWords.length === 0) return null;
-    // Use the max mastery among eligible words to determine N — this matches
-    // the previous behavior where each word's own mastery scaled N.
+    // Use the max mastery among eligible words to determine N.
+    // N scales {6, 12} with mastery — mastery >= 0.90 → 12, else 6.
+    // (Keeps the same {6, 12} tiers as before, just on the continuous scale.)
     const maxMastery = Math.max(...eligibleWords.map((ew) => ew.state.mastery));
-    // N scales {6, 9, 12} with mastery: mastery 4 -> 6, mastery 5 -> 12
-    const targetN = maxMastery >= 5 ? 12 : 6;
+    const targetN = maxMastery >= 0.90 ? 12 : 6;
     const eligibleWordEntries = eligibleWords.map((ew) => ew.word);
     const result = pickGameItems(eligibleWordEntries, targetN);
     if (!result || result.items.length < 6) return null;

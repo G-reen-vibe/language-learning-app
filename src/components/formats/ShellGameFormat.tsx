@@ -38,10 +38,18 @@ export default function ShellGameFormat({
   // word only if there aren't enough eligible words.
   const setup = useMemo(() => {
     if (eligibleWords.length === 0) return null;
-    // Use the max mastery among eligible words to determine N — this matches
-    // the previous behavior where each word's own mastery scaled N.
+    // Use the max mastery among eligible words to determine N — mirrors the
+    // Flashcards app's L4 shell-game scaling:
+    //   mastery < 0.80 → 3 shells
+    //   mastery < 0.90 → 4 shells
+    //   mastery < 0.95 → 5 shells
+    //   mastery >= 0.95 → 6 shells
+    // (Shell game's max N is 6 here.)
     const maxMastery = Math.max(...eligibleWords.map((ew) => ew.state.mastery));
-    const n = maxMastery >= 5 ? 5 : maxMastery >= 4 ? 4 : 3;
+    const n = maxMastery >= 0.95 ? 6
+      : maxMastery >= 0.90 ? 5
+      : maxMastery >= 0.80 ? 4
+      : 3;
     const eligibleWordEntries = eligibleWords.map((ew) => ew.word);
     const result = pickGameItems(eligibleWordEntries, n);
     if (!result || result.items.length < 3) return null;

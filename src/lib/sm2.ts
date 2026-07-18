@@ -1,4 +1,5 @@
 import { WordState } from "./types";
+import { sm2Mastery, cardStateFromWordState } from "./mastery";
 
 /**
  * SM-2 spaced repetition algorithm.
@@ -17,6 +18,11 @@ import { WordState } from "./types";
  *   interval = 1 if rep==1, 6 if rep==2, else round(interval * ease)
  *
  * Ease update: ease = max(1.3, ease + 0.1 - (5-q)*(0.08 + (5-q)*0.02))
+ *
+ * Mastery is now computed from the post-update state using the Flashcards
+ * app's SM-2 mastery formula (see `./mastery.ts::sm2Mastery`). This produces
+ * a smooth, continuous value in [0, 1] that doesn't swing wildly on a
+ * single correct/wrong answer.
  */
 
 export function sm2Update(state: WordState, quality: number): WordState {
@@ -41,59 +47,37 @@ export function sm2Update(state: WordState, quality: number): WordState {
 
   const nextReview = now + interval * 24 * 60 * 60 * 1000;
 
-  // Map (repetitions, interval, recency) → mastery tier 0..5.
-  //
-  // Design goals (stability over volatility):
-  //  - Each correct answer bumps mastery by 1, so progress is steady and
-  //    visible to the user (not gated behind multi-day interval thresholds).
-  //  - Long intervals still act as a floor — if interval crosses a tier
-  //    threshold, mastery is at least that tier.
-  //  - Wrong answers drop mastery by 1, NOT all the way to 1. A single
-  //    mistake should not erase dozens of correct reviews.
-  //
-  // mastery 0 = never seen (handled by caller before first review)
-  // mastery 1 = introduced (1+ correct)
-  // mastery 2 = 2+ correct reps
-  // mastery 3 = interval >= 6 days (sustained)
-  // mastery 4 = interval >= 21 days
-  // mastery 5 = interval >= 60 days (truly mastered)
-  let mastery = state.mastery;
-  if (q >= 3) {
-    // Steady +1 per correct answer, floored by interval tier.
-    const intervalTier =
-      interval >= 60 ? 5
-      : interval >= 21 ? 4
-      : interval >= 6 ? 3
-      : repetitions >= 2 ? 2
-      : 1;
-    mastery = Math.max(state.mastery + 1, intervalTier);
-    // First-ever successful review must land at least at 1.
-    if (!state.seen) mastery = Math.max(mastery, 1);
-    mastery = Math.min(5, mastery);
-  } else {
-    // Wrong answer: drop by 1 (not collapse to 1).
-    // If never seen, treat as introduced-but-weak (mastery 1) so the word
-    // remains servable for diff-1 formats.
-    if (!state.seen) mastery = 1;
-    else mastery = Math.max(1, state.mastery - 1);
-  }
-
   // Set introducedAt on first successful review
   const introducedAt = (!state.seen && q >= 3) ? now : state.introducedAt;
 
-  return {
+  const next: WordState = {
     ...state,
     ease,
     interval,
     repetitions,
     lastReviewed: now,
     nextReview,
-    mastery,
+    // Mastery recomputed from post-update state — smooth, low-volatility.
+    mastery: 0, // set below
     seen: true,
     introducedAt,
     totalReviews: state.totalReviews + 1,
     totalCorrect: state.totalCorrect + (q >= 3 ? 1 : 0),
   };
+
+  const cardState = cardStateFromWordState(next);
+  next.mastery = sm2Mastery(cardState, next.interval, next.lastReviewed, next.totalReviews, now);
+
+  // For a brand-new word seeing its first successful review, the Flashcards
+  // formula returns ~0.06 (1 review, interval=1 → r≈0.9, conf=0.125, mat≈0.18
+  //   → 0.9 * 0.125 * (0.5 + 0.5*0.18) ≈ 0.067).
+  // This is below the 0.10 "introduced" threshold, so the word would NOT
+  // satisfy a `minMasteryForNewWords = 0.10` check immediately after its
+  // introduction. The introduceWord() helper in session.ts handles this by
+  // flooring mastery at 0.10 on the first successful review. For subsequent
+  // real reviews here, the natural formula takes over.
+
+  return next;
 }
 
 /** Create a fresh word state (never seen). */

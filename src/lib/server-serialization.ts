@@ -204,7 +204,9 @@ export function lessonToListItem(
 
   const total = directWordStates.length;
   const seen = directWordStates.filter((s) => s.seen).length;
-  const mastered = directWordStates.filter((s) => s.mastery >= 5).length;
+  // "Mastered" = mastery >= 0.90 (top of the continuous [0,1] scale).
+  const mastered = directWordStates.filter((s) => s.mastery >= 0.90).length;
+  // avgMastery is now in [0, 1] (continuous mastery; was 0..5 integer).
   const avgMastery = total === 0 ? 0 : directWordStates.reduce((s, x) => s + x.mastery, 0) / total;
   const totalReviews = directWordStates.reduce((s, x) => s + x.totalReviews, 0);
   const totalCorrect = directWordStates.reduce((s, x) => s + x.totalCorrect, 0);

@@ -66,10 +66,12 @@ const CreateLessonSchema = z.object({
         .optional(),
     })
   ),
-  // Optional settings override; defaults to FSRS-5 / 10 / 2
+  // Optional settings override; defaults to FSRS-5 / 10 / 0.10
+  // minMasteryForNewWords is now a continuous value in [0,1] — defaults to 0.10
+  // (matches the L1 "introduced" mastery boundary).
   algorithm: z.enum(["SM-2", "FSRS-5"]).optional(),
   maxNewWordsPerDay: z.number().int().min(1).max(100).optional(),
-  minMasteryForNewWords: z.number().int().min(1).max(5).optional(),
+  minMasteryForNewWords: z.number().min(0).max(1).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -93,7 +95,7 @@ export async function POST(req: NextRequest) {
     words,
     algorithm = "FSRS-5",
     maxNewWordsPerDay = 10,
-    minMasteryForNewWords = 2,
+    minMasteryForNewWords = 0.10,
   } = parsed.data;
 
   // Normalize word entries (strip leading "=" from synonym, trim strings)

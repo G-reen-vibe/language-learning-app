@@ -97,13 +97,28 @@ export default function LessonView({ lesson, onBack, onStartStudy, onDebugFormat
     const states = Object.values(lesson.wordStates);
     const totalWords = lesson.words.length;
     const seenWords = states.filter((s) => s.seen).length;
-    const masteredWords = states.filter((s) => s.mastery >= 5).length;
+    // "Mastered" = mastery >= 0.90 (top of the continuous scale — well-learned,
+    // high retrievability, 8+ reviews). This mirrors the Flashcards app's
+    // top-of-tier L4 boundary.
+    const masteredWords = states.filter((s) => s.mastery >= 0.90).length;
+    // avgMastery is now in [0, 1].
     const avgMastery =
       states.length > 0 ? states.reduce((s, w) => s + w.mastery, 0) / states.length : 0;
+    // Bucket mastery into 6 display tiers using the same boundaries the
+    // scheduler uses for format eligibility:
+    //   0 = Never seen, 1 = Introduced (>=0.10), 2 = Basic (>=0.25),
+    //   3 = Intermediate (>=0.50), 4 = Advanced (>=0.75), 5 = Mastered (>=0.90)
     const masteryDistribution = [0, 0, 0, 0, 0, 0];
     for (const s of states) {
-      const m = Math.max(0, Math.min(5, s.mastery | 0));
-      masteryDistribution[m]++;
+      let bucket: number;
+      if (!s.seen) bucket = 0;
+      else if (s.mastery >= 0.90) bucket = 5;
+      else if (s.mastery >= 0.75) bucket = 4;
+      else if (s.mastery >= 0.50) bucket = 3;
+      else if (s.mastery >= 0.25) bucket = 2;
+      else if (s.mastery >= 0.10) bucket = 1;
+      else bucket = 0;
+      masteryDistribution[bucket]++;
     }
     const totalReviews = states.reduce((s, w) => s + w.totalReviews, 0);
     const totalCorrect = states.reduce((s, w) => s + w.totalCorrect, 0);
@@ -130,7 +145,8 @@ export default function LessonView({ lesson, onBack, onStartStudy, onDebugFormat
     setEditingName(false);
   };
 
-  const masteryPct = Math.round((stats.avgMastery / 5) * 100);
+  // Mastery is now continuous [0,1]. Convert directly to a percentage.
+  const masteryPct = Math.round(stats.avgMastery * 100);
   const progressPct = stats.totalWords > 0 ? Math.round((stats.seenWords / stats.totalWords) * 100) : 0;
 
   return (
@@ -294,12 +310,14 @@ export default function LessonView({ lesson, onBack, onStartStudy, onDebugFormat
             <div className="space-y-2">
               <Label>
                 Min mastery for new words:{" "}
-                <span className="font-semibold">{lesson.settings.minMasteryForNewWords}</span>
+                <span className="font-semibold">
+                  {Math.round(lesson.settings.minMasteryForNewWords * 100)}%
+                </span>
               </Label>
               <Slider
-                min={1}
-                max={5}
-                step={1}
+                min={0.05}
+                max={1.0}
+                step={0.05}
                 value={[lesson.settings.minMasteryForNewWords]}
                 onValueChange={(v) =>
                   updateLessonSettings(lesson.id, { minMasteryForNewWords: v[0] })
@@ -307,6 +325,7 @@ export default function LessonView({ lesson, onBack, onStartStudy, onDebugFormat
               />
               <p className="text-xs text-muted-foreground">
                 Existing words must reach this mastery before new words are introduced.
+                (10% = introduced, 25% = basic, 50% = intermediate, 75% = advanced)
               </p>
             </div>
           </CardContent>
@@ -468,7 +487,20 @@ export default function LessonView({ lesson, onBack, onStartStudy, onDebugFormat
           {lesson.words.map((w, i) => {
             const key = wordKeyOf(w);
             const state = lesson.wordStates[key];
-            const mastery = state ? state.mastery : 0;
+            const mastery = state ? state.mastery : 0; // continuous [0,1]
+            // Bucket the continuous mastery into 6 display tiers using the same
+            // boundaries the scheduler uses for format eligibility (see
+            // MASTERY_THRESHOLDS in session.ts):
+            //   0 = Never seen, 1 = Introduced (>=0.10), 2 = Basic (>=0.25),
+            //   3 = Intermediate (>=0.50), 4 = Advanced (>=0.75), 5 = Mastered (>=0.90)
+            let bucket: number;
+            if (!state || !state.seen) bucket = 0;
+            else if (mastery >= 0.90) bucket = 5;
+            else if (mastery >= 0.75) bucket = 4;
+            else if (mastery >= 0.50) bucket = 3;
+            else if (mastery >= 0.25) bucket = 2;
+            else if (mastery >= 0.10) bucket = 1;
+            else bucket = 0;
             const masteryColors = [
               "bg-gray-300",
               "bg-red-400",
@@ -483,9 +515,10 @@ export default function LessonView({ lesson, onBack, onStartStudy, onDebugFormat
                 className="flex items-center gap-3 py-2 px-2 rounded-md hover:bg-muted/30"
               >
                 <div
-                  className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white ${masteryColors[mastery]} shrink-0`}
+                  className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white ${masteryColors[bucket]} shrink-0`}
+                  title={`Mastery: ${Math.round(mastery * 100)}%`}
                 >
-                  {mastery}
+                  {bucket}
                 </div>
                 <div className="flex-1 min-w-0">
                   <span className="font-medium truncate">{w.word}</span>
