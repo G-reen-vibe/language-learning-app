@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { FormatComponentProps } from "./format-types";
-import { pickGameItems } from "@/lib/format-helpers";
+import { pickGameItems, buildGameQuestion } from "@/lib/format-helpers";
 import { shuffle, wordKeyOf, ASPECT_LABELS } from "@/lib/aspects";
 import { QuestionResult, Aspect } from "@/lib/types";
 import { playSound } from "@/lib/sounds";
@@ -13,9 +13,14 @@ import { playSound } from "@/lib/sounds";
 type Phase = "preview" | "prompt" | "reveal";
 
 interface Prompt {
-  aspect: Aspect;
-  correctCardIdx: number;
-  wordKey: string; // for grading — the word this aspect belongs to
+  // The aspect the user is asked to find — can be ANY aspect of the source
+  // word besides def/expl, not necessarily the aspect displayed on the card.
+  // This makes the question non-trivial: instead of "find the card that says
+  // 'cat'", the question might be "find the card whose translation is 'gato'"
+  // when the card displays the word form "cat".
+  questionAspect: Aspect;
+  correctCardIdx: number; // index into setup.cardItems
+  wordKey: string; // for grading — the source word of the correct card
 }
 
 export default function CardGameFormat({
@@ -36,9 +41,9 @@ export default function CardGameFormat({
     // N scales {4, 6, 9} with mastery: mastery 4 -> 4, mastery 5 -> 9
     const targetN = maxMastery >= 5 ? 9 : 4;
     const eligibleWordEntries = eligibleWords.map((ew) => ew.word);
-    // pickGameItems prefers ONE ASPECT PER WORD so each card represents a
-    // different concept. Falls back to multiple aspects per word only if
-    // there aren't enough eligible words (e.g., a 3-word lesson with N=9).
+    // pickGameItems picks ONE ASPECT PER WORD so each card represents a
+    // different concept. Returns null if there aren't enough eligible words
+    // — in that case the format is not servable and onDone is called.
     const result = pickGameItems(eligibleWordEntries, targetN);
     if (!result || result.items.length < 4) return null;
     return {
@@ -47,6 +52,10 @@ export default function CardGameFormat({
     };
   }, [eligibleWords]);
 
+  // Build prompts: for each target card, ask about ANY aspect of its source
+  // word (besides def/expl). The question aspect is chosen via buildGameQuestion
+  // which guarantees no ambiguity (the question value uniquely identifies the
+  // target card among all cards on the board).
   const prompts = useMemo<Prompt[]>(() => {
     if (!setup) return [];
     const indices = setup.cardItems.map((_, i) => i);
@@ -55,11 +64,19 @@ export default function CardGameFormat({
     const out: Prompt[] = [];
     for (let i = 0; i < count; i++) {
       const idx = shuffled[i];
-      const aspect = setup.cardItems[idx];
-      // Find the correct card (same value) — there should be exactly one
-      const correctCardIdx = setup.cardItems.findIndex((c) => c.value === aspect.value);
-      const wordKey = wordKeyOf(setup.sources[idx]);
-      out.push({ aspect, correctCardIdx, wordKey });
+      const optionAspect = setup.cardItems[idx];
+      const targetWord = setup.sources[idx];
+      const questionAspect = buildGameQuestion(
+        targetWord,
+        optionAspect,
+        setup.sources
+      );
+      if (!questionAspect) continue; // skip cards we can't build a question for
+      out.push({
+        questionAspect,
+        correctCardIdx: idx,
+        wordKey: wordKeyOf(targetWord),
+      });
     }
     return out;
   }, [setup, numPrompts]);
@@ -100,11 +117,11 @@ export default function CardGameFormat({
   }, [phase, setup]);
 
   useEffect(() => {
-    if (!setup && !completed) {
+    if ((!setup || prompts.length === 0) && !completed) {
       setCompleted(true);
       onDone([], 0);
     }
-  }, [setup, completed, onDone]);
+  }, [setup, prompts, completed, onDone]);
 
   const handlePreviewCardClick = useCallback(
     (displayPos: number) => {
@@ -204,6 +221,10 @@ export default function CardGameFormat({
               const isFaceUp = phase === "preview";
               const isSelected = selectedCard === displayPos;
               const isClicked = clickedCard === displayPos;
+              // During reveal, show the clicked card and the correct card.
+              // The correct card is identified by its source word (correctCardIdx),
+              // NOT by matching the question aspect value — because the question
+              // aspect can be a DIFFERENT aspect from the one displayed.
               const showItem =
                 isFaceUp ||
                 (phase === "reveal" &&
@@ -241,8 +262,8 @@ export default function CardGameFormat({
 
           {phase === "prompt" && current && (
             <div className="text-center">
-              <Badge variant="secondary">Find the card with the {ASPECT_LABELS[current.aspect.type]}:</Badge>
-              <div className="mt-2 text-2xl font-bold">{current.aspect.value}</div>
+              <Badge variant="secondary">Find the card with the {ASPECT_LABELS[current.questionAspect.type]}:</Badge>
+              <div className="mt-2 text-2xl font-bold">{current.questionAspect.value}</div>
             </div>
           )}
           {phase === "reveal" && (

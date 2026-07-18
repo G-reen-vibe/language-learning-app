@@ -442,25 +442,30 @@ export function pickShellItemsMulti(
 
 /**
  * Pick N "shell" aspects (word/alt forms/synonym/translation) for the games
- * (Shell, Card, Marble) such that EACH ITEM COMES FROM A DIFFERENT WORD
- * whenever possible. This is the recommended helper for game setups because
- * having multiple aspects of the SAME word on the board makes the question
- * very hard to answer (the user can't tell which shell/slot corresponds to
- * which concept when they're all facets of the same word).
+ * (Shell, Card, Marble) such that EACH ITEM COMES FROM A DIFFERENT WORD.
+ *
+ * This is the recommended helper for game setups because having multiple
+ * aspects of the SAME word on the board makes the question very hard to
+ * answer (the user can't tell which shell/slot corresponds to which concept
+ * when they're all facets of the same word). It also creates ambiguous
+ * questions — e.g. if "hiragana" (romaji) and "ひらがな" (hiragana form)
+ * of the same word both appear as separate cards, the user has no way to
+ * know which card the question is asking about.
  *
  * Algorithm:
- *  1. First pass: walk through eligible words in random order and pick ONE
- *     aspect from each (preferring the "word" form so the user sees the
- *     canonical spelling). Continue until we have N items.
- *  2. Second pass (fallback): if there aren't enough eligible words to fill
- *     N slots with one aspect each, supplement with additional aspects from
- *     the already-used words. This keeps the game playable for small lessons.
+ *  Walk through eligible words in random order and pick ONE aspect from each
+ *  (preferring the "word" form so the user sees the canonical spelling).
+ *  Continue until we have N items, OR run out of words.
  *
- * Returns null if we can't gather at least 3 items (the minimum for any game).
+ * Returns null if we can't gather at least `minItems` items. The caller is
+ * responsible for treating null as "this format is not servable right now"
+ * — the question is simply not allowed if there aren't enough eligible
+ * words at the required mastery level.
  */
 export function pickGameItems(
   eligibleWords: WordEntry[],
-  n: number
+  n: number,
+  minItems = 3
 ): { items: Aspect[]; sources: WordEntry[] } | null {
   if (eligibleWords.length === 0 || n < 1) return null;
 
@@ -468,16 +473,14 @@ export function pickGameItems(
   const items: Aspect[] = [];
   const sources: WordEntry[] = [];
   const usedValues = new Set<string>();
-  const usedWordKeys = new Set<string>();
   const SHELL_TYPES: AspectType[] = ["word", "alt1", "alt2", "alt3", "synonym", "translation"];
 
   const shellAspectsOf = (w: WordEntry): Aspect[] =>
     getAspects(w).filter((a) => SHELL_TYPES.includes(a.type));
 
-  // First pass: one aspect per word (different words).
-  // Prefer the "word" form so the user sees the canonical spelling on the
-  // board — this is the most recognizable aspect and makes the game feel
-  // less arbitrary.
+  // One aspect per word (different words). Prefer the "word" form so the
+  // user sees the canonical spelling on the board — this is the most
+  // recognizable aspect and makes the game feel less arbitrary.
   for (const w of shuffledWords) {
     if (items.length >= n) break;
     const aspects = shellAspectsOf(w).filter((a) => !usedValues.has(a.value));
@@ -487,27 +490,75 @@ export function pickGameItems(
     items.push(preferred);
     sources.push(w);
     usedValues.add(preferred.value);
-    usedWordKeys.add(wordKeyOf(w));
   }
 
-  // Second pass (fallback): if we still need more items, supplement with
-  // additional aspects from any eligible word (including already-used ones).
-  // This happens for small lessons where the number of eligible words is
-  // less than N (e.g., a 3-word lesson playing Marble Game with N=6).
-  if (items.length < n) {
-    for (const w of shuffledWords) {
-      if (items.length >= n) break;
-      const aspects = shellAspectsOf(w).filter((a) => !usedValues.has(a.value));
-      for (const a of aspects) {
-        if (items.length >= n) break;
-        items.push(a);
-        sources.push(w);
-        usedValues.add(a.value);
-      }
+  // Need at least `minItems` for any game to be meaningful.
+  if (items.length < Math.min(minItems, n)) return null;
+  return { items, sources };
+}
+
+/**
+ * Build a question for a "game" format (Shell / Card / Marble).
+ *
+ * Each card/shell/slot on the board displays ONE aspect of its source word
+ * (the "option" aspect). The QUESTION can ask about ANY aspect of that
+ * source word besides `definition` and `explanation` (which are too long
+ * to display). The question aspect can be the SAME as the option aspect
+ * (trivial: "find the card that says X") or a DIFFERENT aspect (harder:
+ * "find the card whose translation is X" when the card displays the word).
+ *
+ * To avoid ambiguous questions, the question aspect value must NOT appear
+ * as any aspect value of any OTHER source word on the board. Otherwise the
+ * user couldn't uniquely identify the correct card.
+ *
+ * @param targetWord   The source word of the correct card.
+ * @param optionAspect The aspect displayed on the correct card.
+ * @param allSources   All source words on the board (including targetWord).
+ * @returns A question aspect (with type + value) that uniquely identifies
+ *          the target card, or null if no unambiguous question can be built.
+ */
+export function buildGameQuestion(
+  targetWord: WordEntry,
+  optionAspect: Aspect,
+  allSources: WordEntry[]
+): Aspect | null {
+  // Candidate question aspects: any aspect of targetWord besides def/expl.
+  const candidates = getAspects(targetWord).filter(
+    (a) => a.type !== "definition" && a.type !== "explanation" && a.value.trim().length > 0
+  );
+  if (candidates.length === 0) return null;
+
+  // For each OTHER source word on the board, collect ALL of its aspect values
+  // (regardless of type) so we can detect ambiguity. If the question value
+  // appears anywhere in another word's aspects, the question is ambiguous.
+  const otherAspectValues = new Set<string>();
+  for (const w of allSources) {
+    if (w === targetWord) continue;
+    for (const a of getAspects(w)) {
+      if (a.value.trim().length > 0) otherAspectValues.add(a.value);
     }
   }
 
-  // Need at least 3 items for any game to be meaningful.
-  if (items.length < Math.min(3, n)) return null;
-  return { items, sources };
+  // Prefer a DIFFERENT aspect from the option (so the question is non-trivial
+  // — the user has to actually know the word, not just match text).
+  // Fall back to the option aspect itself if no different aspect is available.
+  const different = candidates.filter((a) => a.value !== optionAspect.value);
+  const preferred = different.length > 0 ? different : candidates;
+
+  // Among preferred, find one whose value is unique across all other source
+  // words' aspects (no ambiguity).
+  const unambiguous = preferred.filter((a) => !otherAspectValues.has(a.value));
+  if (unambiguous.length > 0) {
+    return pickRandom(unambiguous);
+  }
+
+  // If no different-aspect question is unambiguous, try the option aspect
+  // itself (the trivial "find the card that says X" form). This is always
+  // unambiguous because option values are unique across the board.
+  const optionInCandidates = candidates.find((a) => a.value === optionAspect.value);
+  if (optionInCandidates && !otherAspectValues.has(optionInCandidates.value)) {
+    return optionInCandidates;
+  }
+
+  return null;
 }

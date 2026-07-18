@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { FormatComponentProps } from "./format-types";
-import { pickGameItems } from "@/lib/format-helpers";
+import { pickGameItems, buildGameQuestion } from "@/lib/format-helpers";
 import { shuffle, wordKeyOf, ASPECT_LABELS } from "@/lib/aspects";
 import { QuestionResult, Aspect } from "@/lib/types";
 import { playSound } from "@/lib/sounds";
@@ -13,9 +13,11 @@ import { playSound } from "@/lib/sounds";
 type Phase = "preview" | "shuffling" | "prompt" | "reveal";
 
 interface Prompt {
-  aspect: Aspect;
-  correctShellIdx: number;
-  wordKey: string; // for grading — the word this aspect belongs to
+  // The aspect the user is asked to find — can be ANY aspect of the source
+  // word besides def/expl, not necessarily the aspect displayed on the shell.
+  questionAspect: Aspect;
+  correctShellIdx: number; // index into setup.shellItems
+  wordKey: string; // for grading — the source word of the correct shell
 }
 
 const SHELL_W = 120; // px (w-28 = 7rem = 112px, but we use 120 for spacing)
@@ -57,10 +59,19 @@ export default function ShellGameFormat({
     const out: Prompt[] = [];
     for (let i = 0; i < count; i++) {
       const idx = shuffled[i];
-      const aspect = setup.shellItems[idx];
-      const correctShellIdx = setup.shellItems.findIndex((s) => s.value === aspect.value);
-      const wordKey = wordKeyOf(setup.sources[idx]);
-      out.push({ aspect, correctShellIdx, wordKey });
+      const optionAspect = setup.shellItems[idx];
+      const targetWord = setup.sources[idx];
+      const questionAspect = buildGameQuestion(
+        targetWord,
+        optionAspect,
+        setup.sources
+      );
+      if (!questionAspect) continue;
+      out.push({
+        questionAspect,
+        correctShellIdx: idx,
+        wordKey: wordKeyOf(targetWord),
+      });
     }
     return out;
   }, [setup, numPrompts]);
@@ -134,11 +145,11 @@ export default function ShellGameFormat({
   }, [setup, startShuffling]);
 
   useEffect(() => {
-    if (!setup && !completed) {
+    if ((!setup || prompts.length === 0) && !completed) {
       setCompleted(true);
       onDone([], 0);
     }
-  }, [setup, completed, onDone]);
+  }, [setup, prompts, completed, onDone]);
 
   const handleShellClick = useCallback(
     (origIdx: number) => {
@@ -171,7 +182,7 @@ export default function ShellGameFormat({
         }
       }, 1500);
     },
-    [phase, selectedShell, prompts, promptIdx, setup, onResult, onDone]
+    [phase, selectedShell, prompts, promptIdx, onResult, onDone]
   );
 
   if (!setup || prompts.length === 0 || positions.length === 0) return null;
@@ -267,8 +278,8 @@ export default function ShellGameFormat({
           {/* Prompt */}
           {phase === "prompt" && (
             <div className="text-center">
-              <Badge variant="secondary">Find the shell with the {ASPECT_LABELS[current.aspect.type]}:</Badge>
-              <div className="mt-2 text-2xl font-bold">{current.aspect.value}</div>
+              <Badge variant="secondary">Find the shell with the {ASPECT_LABELS[current.questionAspect.type]}:</Badge>
+              <div className="mt-2 text-2xl font-bold">{current.questionAspect.value}</div>
             </div>
           )}
           {phase === "reveal" && (

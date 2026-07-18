@@ -5,10 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { FormatComponentProps } from "./format-types";
-import { pickGameItems } from "@/lib/format-helpers";
-import { shuffle, wordKeyOf } from "@/lib/aspects";
+import { pickGameItems, buildGameQuestion } from "@/lib/format-helpers";
+import { shuffle, wordKeyOf, ASPECT_LABELS, getAspects } from "@/lib/aspects";
 import { playSound } from "@/lib/sounds";
-import { QuestionResult } from "@/lib/types";
+import { QuestionResult, Aspect } from "@/lib/types";
 
 type Phase = "preview" | "aiming" | "falling" | "reveal" | "answer" | "postanswer" | "reslot";
 
@@ -54,8 +54,9 @@ export default function MarbleGameFormat({
   const numPrompts = Math.min(defaultCount, remainingBudget);
 
   // Setup: pick N slot items, ONE ASPECT PER WORD (different words) so each
-  // slot represents a different concept. Falls back to multiple aspects per
-  // word only if there aren't enough eligible words.
+  // slot represents a different concept. Returns null if there aren't enough
+  // eligible words — in that case the format is not servable and onDone is
+  // called.
   const setup = useMemo(() => {
     if (eligibleWords.length === 0) return null;
     // Use the max mastery among eligible words to determine N — this matches
@@ -283,24 +284,69 @@ export default function MarbleGameFormat({
     };
   }, [phase]);
 
-  // Answer choices: based on the ACTUAL landed slot (not pre-selected)
-  const choices = useMemo(() => {
-    if (!setup || landedSlotIdx === null) return [];
-    const correctValue = setup.slotItems[landedSlotIdx].value;
-    // Distractors: other slot items' values
-    const pool = setup.slotItems
-      .map((s) => s.value)
-      .filter((v) => v !== correctValue);
-    const distractors = shuffle(pool).slice(0, Math.min(3, pool.length));
-    return shuffle([correctValue, ...distractors]);
+  // If we land in a slot but can't build a valid question for it (e.g. the
+  // source word has no aspects besides the displayed one, or distractors can't
+  // be gathered without ambiguity), skip this marble and fire the next one.
+  useEffect(() => {
+    if (phase !== "answer" || question !== null || landedSlotIdx === null) return;
+    if (completedRef.current) return;
+    timerRef.current = setTimeout(() => {
+      setLandedSlotIdx(null);
+      if (promptIdx + 1 >= totalMarbles) {
+        if (!completedRef.current) {
+          completedRef.current = true;
+          setCompleted(true);
+          onDone([], totalMarbles);
+        }
+      } else {
+        setPromptIdx(promptIdx + 1);
+        setPhase("reslot");
+      }
+    }, 600);
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [phase, question, landedSlotIdx, promptIdx, totalMarbles, onDone]);
+
+  // When the marble lands, build a question for the landed slot.
+  // The question asks the user to identify ANY aspect (besides def/expl) of
+  // the source word of the landed slot — not just the aspect that was
+  // displayed. This makes the question non-trivial and exercises real
+  // recall of the word's full aspect set.
+  const question = useMemo<{ aspect: Aspect; choices: string[]; correctValue: string } | null>(() => {
+    if (!setup || landedSlotIdx === null) return null;
+    const optionAspect = setup.slotItems[landedSlotIdx];
+    const targetWord = setup.sources[landedSlotIdx];
+    const questionAspect = buildGameQuestion(
+      targetWord,
+      optionAspect,
+      setup.sources
+    );
+    if (!questionAspect) return null;
+    const correctValue = questionAspect.value;
+    // Distractors: any aspect value (besides def/expl) from OTHER source
+    // words, ensuring no duplicates with the correct value or each other.
+    const distractorPool: string[] = [];
+    for (let i = 0; i < setup.sources.length; i++) {
+      if (i === landedSlotIdx) continue;
+      const w = setup.sources[i];
+      for (const a of getAspects(w)) {
+        if (a.type === "definition" || a.type === "explanation") continue;
+        if (a.value.trim().length === 0) continue;
+        if (a.value !== correctValue) distractorPool.push(a.value);
+      }
+    }
+    const distractors = shuffle(Array.from(new Set(distractorPool))).slice(0, 3);
+    if (distractors.length < 3) return null; // not enough distractors
+    const choices = shuffle([correctValue, ...distractors]);
+    return { aspect: questionAspect, choices, correctValue };
   }, [setup, landedSlotIdx]);
 
   const handleAnswer = useCallback(
     (choice: string) => {
-      if (phase !== "answer" || selectedChoice !== null || landedSlotIdx === null) return;
+      if (phase !== "answer" || selectedChoice !== null || landedSlotIdx === null || !question) return;
       setSelectedChoice(choice);
-      const correctValue = setup!.slotItems[landedSlotIdx].value;
-      const correct = choice === correctValue;
+      const correct = choice === question.correctValue;
       setRevealCorrect(correct);
       const r: QuestionResult = {
         wordKey: wordKeyOf(setup!.sources[landedSlotIdx]),
@@ -330,7 +376,7 @@ export default function MarbleGameFormat({
         }, 1500);
       }, 1500);
     },
-    [phase, selectedChoice, landedSlotIdx, promptIdx, setup, totalMarbles, onResult, onDone]
+    [phase, selectedChoice, landedSlotIdx, promptIdx, setup, totalMarbles, question, onResult, onDone]
   );
 
   // "reslot" phase: show slots briefly again, then aim next marble
@@ -504,15 +550,16 @@ export default function MarbleGameFormat({
               <Badge variant="secondary">Marble landed in slot {landedSlotIdx + 1}!</Badge>
             </div>
           )}
-          {phase === "answer" && landedSlotIdx !== null && (
+          {phase === "answer" && landedSlotIdx !== null && question && (
             <div className="space-y-3">
               <div className="text-center">
-                <Badge variant="secondary">Which aspect was in the slot the marble landed in?</Badge>
+                <Badge variant="secondary">
+                  Which {ASPECT_LABELS[question.aspect.type]} was in slot {landedSlotIdx + 1}?
+                </Badge>
               </div>
               <div className="grid grid-cols-2 gap-2">
-                {choices.map((c, i) => {
-                  const correctValue = setup.slotItems[landedSlotIdx].value;
-                  const isCorrect = c === correctValue;
+                {question.choices.map((c, i) => {
+                  const isCorrect = c === question.correctValue;
                   const isSelected = c === selectedChoice;
                   return (
                     <Button
