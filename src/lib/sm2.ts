@@ -41,7 +41,16 @@ export function sm2Update(state: WordState, quality: number): WordState {
 
   const nextReview = now + interval * 24 * 60 * 60 * 1000;
 
-  // Map (repetitions, interval) → mastery tier 0..5.
+  // Map (repetitions, interval, recency) → mastery tier 0..5.
+  //
+  // Design goals (stability over volatility):
+  //  - Each correct answer bumps mastery by 1, so progress is steady and
+  //    visible to the user (not gated behind multi-day interval thresholds).
+  //  - Long intervals still act as a floor — if interval crosses a tier
+  //    threshold, mastery is at least that tier.
+  //  - Wrong answers drop mastery by 1, NOT all the way to 1. A single
+  //    mistake should not erase dozens of correct reviews.
+  //
   // mastery 0 = never seen (handled by caller before first review)
   // mastery 1 = introduced (1+ correct)
   // mastery 2 = 2+ correct reps
@@ -50,16 +59,23 @@ export function sm2Update(state: WordState, quality: number): WordState {
   // mastery 5 = interval >= 60 days (truly mastered)
   let mastery = state.mastery;
   if (q >= 3) {
-    if (interval >= 60) mastery = 5;
-    else if (interval >= 21) mastery = 4;
-    else if (interval >= 6) mastery = 3;
-    else if (repetitions >= 2) mastery = 2;
-    else mastery = 1;
+    // Steady +1 per correct answer, floored by interval tier.
+    const intervalTier =
+      interval >= 60 ? 5
+      : interval >= 21 ? 4
+      : interval >= 6 ? 3
+      : repetitions >= 2 ? 2
+      : 1;
+    mastery = Math.max(state.mastery + 1, intervalTier);
+    // First-ever successful review must land at least at 1.
+    if (!state.seen) mastery = Math.max(mastery, 1);
+    mastery = Math.min(5, mastery);
   } else {
-    // failed: if never seen, treat as introduced-but-weak (mastery 1)
-    // so the word remains servable for diff-1 formats
+    // Wrong answer: drop by 1 (not collapse to 1).
+    // If never seen, treat as introduced-but-weak (mastery 1) so the word
+    // remains servable for diff-1 formats.
     if (!state.seen) mastery = 1;
-    else mastery = Math.min(state.mastery, 1);
+    else mastery = Math.max(1, state.mastery - 1);
   }
 
   // Set introducedAt on first successful review

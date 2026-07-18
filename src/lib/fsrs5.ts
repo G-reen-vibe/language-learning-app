@@ -115,20 +115,25 @@ export function fsrs5Update(state: WordState, quality: number): WordState {
   const interval = Math.max(1, Math.round(stability));
   const nextReview = now + interval * 24 * 60 * 60 * 1000;
 
-  // Mastery
+  // Mastery — same stability-oriented mapping as SM-2:
+  //  - Each positive review bumps mastery by 1 (steady visible progress).
+  //  - Stability tier acts as a floor.
+  //  - Lapse drops mastery by 1 (not collapse to 1).
   let mastery = state.mastery;
   if (g >= 2) {
-    // positive
-    if (stability >= 60) mastery = 5;
-    else if (stability >= 21) mastery = 4;
-    else if (stability >= 6) mastery = 3;
-    else if (stability >= 2) mastery = 2;
-    else if (stability >= 0.4) mastery = 1;
+    const stabilityTier =
+      stability >= 60 ? 5
+      : stability >= 21 ? 4
+      : stability >= 6 ? 3
+      : stability >= 2 ? 2
+      : 1;
+    mastery = Math.max(state.mastery + 1, stabilityTier);
+    if (!state.seen) mastery = Math.max(mastery, 1);
+    mastery = Math.min(5, mastery);
   } else {
-    // lapse — if never seen, treat as introduced-but-weak (mastery 1)
-    // so the word remains servable for diff-1 formats
+    // lapse — drop by 1, not collapse to 1.
     if (!state.seen) mastery = 1;
-    else mastery = Math.min(state.mastery, 1);
+    else mastery = Math.max(1, state.mastery - 1);
   }
 
   // Set introducedAt on first successful review
