@@ -351,7 +351,7 @@ export default function LessonView({ lesson, onBack, onStartStudy, onDebugFormat
           icon={<Flame className="h-4 w-4" />}
           label="Mastered"
           value={stats.masteredWords}
-          sub="mastery ≥ 5"
+          sub="mastery ≥ 90%"
         />
         <StatCard
           icon={<Clock className="h-4 w-4" />}
