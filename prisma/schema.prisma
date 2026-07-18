@@ -1,0 +1,130 @@
+// Linguo — Language Learning schema
+// Mirrors the localStorage UserData shape (lessons, words, word states, sessions, stats)
+// so that the app syncs across devices via a shared server-side SQLite database.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Lesson {
+  id            String   @id @default(cuid())
+  name          String
+  // Algorithm + daily-new-word config are per-lesson (matches LessonSettings type)
+  algorithm               String  @default("FSRS-5") // "SM-2" | "FSRS-5"
+  maxNewWordsPerDay       Int     @default(10)
+  minMasteryForNewWords   Int     @default(2)
+  // Daily new-word counter; reset to 0 when lastStudyDate != today (in client
+  // study-view initializer, exactly as the localStorage version did)
+  newWordsIntroducedToday Int     @default(0)
+  lastStudyDate            String? // "YYYY-MM-DD" in user's local timezone
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  words        WordEntry[]
+  wordStates   WordState[]
+  sessions     SessionRecord[]
+
+  @@index([lastStudyDate])
+}
+
+/// A user-supplied word record. `wordKey` (word.trim().toLowerCase()) is the
+/// stable identifier used to match a WordEntry to its WordState.
+model WordEntry {
+  id           String          @id @default(cuid())
+  lessonId     String
+  lesson       Lesson          @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  orderIndex   Int             // preserves user input order
+  word         String
+  definition   String?
+  synonym      String? // stored WITHOUT the "=" prefix
+  translation  String?
+  explanation  String?
+  alt1         String?
+  alt2         String?
+  alt3         String?
+  sentences    SentenceEntry[]
+
+  @@index([lessonId, orderIndex])
+}
+
+model SentenceEntry {
+  id          String    @id @default(cuid())
+  wordEntryId String
+  wordEntry   WordEntry @relation(fields: [wordEntryId], references: [id], onDelete: Cascade)
+  orderIndex  Int
+  exert       String // e.g. "El [the] gato [cat] duerme [sleeps]."
+  translation String
+
+  @@index([wordEntryId, orderIndex])
+}
+
+/// Per-word learning state. Carries BOTH SM-2 and FSRS-5 fields at all times;
+/// whichever algorithm the lesson uses, the other's fields stay at their
+/// last-written values (or defaults). This mirrors the original WordState type.
+///
+/// `wordKey` is unique per lesson — two WordEntries with the same lowercased
+/// `word` collapse to the same WordState (matches the original behavior).
+model WordState {
+  id            String   @id @default(cuid())
+  lessonId      String
+  lesson        Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  wordKey       String
+
+  // SM-2 fields
+  ease          Float    @default(2.5)
+  interval      Int      @default(0) // days
+  repetitions   Int      @default(0)
+  lastReviewed  DateTime?
+  // (nextReview is computed by both schedulers but never read by the app —
+  // the app uses mastery-tier gating, not a date-based queue. Omitted here.)
+
+  // FSRS-5 fields
+  stability     Float    @default(0) // days
+  difficulty    Float    @default(5) // 1..10
+
+  // Common
+  mastery       Int      @default(0) // 0..5 (0 = never seen)
+  seen          Boolean  @default(false)
+  introducedAt  DateTime?
+  totalReviews  Int      @default(0)
+  totalCorrect  Int      @default(0)
+
+  @@unique([lessonId, wordKey])
+  @@index([lessonId, mastery])
+  @@index([lessonId, seen])
+}
+
+model SessionRecord {
+  id              String   @id @default(cuid())
+  lessonId        String
+  lesson          Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  mode            String   // "daily" | "lesson" | "rush"
+  startedAt       DateTime
+  endedAt         DateTime?
+  questionsServed Int      @default(0)
+  correctCount    Int      @default(0)
+  wrongCount      Int      @default(0)
+  livesUsed       Int?
+  durationSec     Int      @default(0)
+  // Stored as a JSON array of wordKeys — never queried individually
+  wordsStudied    String   @default("[]")
+
+  @@index([lessonId, startedAt])
+}
+
+/// Singleton row (id = "global") holding the app-wide stats. Stored
+/// denormalized for fast reads — updated transactionally on session end.
+model GlobalStats {
+  id              String   @id @default("global")
+  totalSessions   Int      @default(0)
+  totalQuestions  Int      @default(0)
+  totalCorrect    Int      @default(0)
+  currentStreak   Int      @default(0)
+  lastStudyDate   String? // "YYYY-MM-DD"
+}
