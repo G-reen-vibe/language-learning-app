@@ -20,6 +20,7 @@ import {
 import {
   pickNextFormat,
   eligibleWordsForFormat,
+  isFormatServable,
   modeQuestionTarget,
   RUSH_DURATION_SEC,
   RUSH_LIVES,
@@ -487,8 +488,23 @@ export default function StudyView({ lesson, mode, onExit, debugFormat }: StudyVi
       return;
     }
 
-    // In debug mode, always force the same format
-    const fmt = debugFormat || pickNextFormat(workingLessonRef.current, recentFormats, usedFormatsThisSession);
+    // In debug mode, always force the same format — BUT only if it's actually
+    // servable. If the user picked a debug format that can't run with the
+    // current eligible words (e.g. Marble Game needs 6+ words at mastery but
+    // the lesson only has 5), we'd otherwise loop forever: format mounts →
+    // returns null → onDone → format re-mounts → ...
+    let fmt: FormatType | null;
+    if (debugFormat) {
+      if (!isFormatServable(workingLessonRef.current, debugFormat)) {
+        // Debug format can't run — end the session so the user sees a clean
+        // exit instead of an infinite loop.
+        endSession();
+        return;
+      }
+      fmt = debugFormat;
+    } else {
+      fmt = pickNextFormat(workingLessonRef.current, recentFormats, usedFormatsThisSession);
+    }
     if (!fmt) {
       endSession();
       return;

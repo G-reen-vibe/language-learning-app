@@ -117,6 +117,12 @@ export default function MarbleGameFormat({
   const [revealCorrect, setRevealCorrect] = useState(false);
   const cannonAngleRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Question for the currently-landed slot. Set when the marble lands (in the
+  // physics step) so the answer phase can render it. Using state (not useMemo)
+  // because the question is built once per landing and must not change on
+  // re-renders — useMemo would recompute if `setup` identity changed, which
+  // can cause cascading renders in the answer phase.
+  const [question, setQuestion] = useState<{ aspect: Aspect; choices: string[]; correctValue: string } | null>(null);
   // Ref to the scrollable container so we can auto-scroll to follow the marble
   // and to bring the landed slot into view on mobile (where the 600px board
   // overflows the viewport and the user would otherwise lose track of the
@@ -248,7 +254,40 @@ export default function MarbleGameFormat({
         marbleRef.current = null;
         setMarble(null);
         setLandedSlotIdx(clampedIdx);
-        setPhase("reveal");
+        // Build the question for this slot IMMEDIATELY (not in a useMemo) so
+        // it's stable across re-renders during the answer phase. If we can't
+        // build a valid question (e.g. not enough distractors), skip this
+        // marble by going straight to reslot after a short reveal.
+        const optionAspect = setup.slotItems[clampedIdx];
+        const targetWord = setup.sources[clampedIdx];
+        const questionAspect = buildGameQuestion(targetWord, optionAspect, setup.sources);
+        if (questionAspect) {
+          // Gather distractors from other source words' aspects (any non-def/expl).
+          const distractorPool: string[] = [];
+          for (let i = 0; i < setup.sources.length; i++) {
+            if (i === clampedIdx) continue;
+            const w = setup.sources[i];
+            for (const a of getAspects(w)) {
+              if (a.type === "definition" || a.type === "explanation") continue;
+              if (a.value.trim().length === 0) continue;
+              if (a.value !== questionAspect.value) distractorPool.push(a.value);
+            }
+          }
+          const distractors = shuffle(Array.from(new Set(distractorPool))).slice(0, 3);
+          if (distractors.length >= 3) {
+            const choices = shuffle([questionAspect.value, ...distractors]);
+            setQuestion({ aspect: questionAspect, choices, correctValue: questionAspect.value });
+            setPhase("reveal");
+          } else {
+            // Not enough distractors — skip this marble.
+            setQuestion(null);
+            setPhase("postanswer");
+          }
+        } else {
+          // Can't build a question — skip this marble.
+          setQuestion(null);
+          setPhase("postanswer");
+        }
         playSound("land");
         // Auto-scroll to bring the landed slot into view. On mobile the
         // 600px board overflows the viewport, so without this the user
@@ -273,7 +312,9 @@ export default function MarbleGameFormat({
     };
   }, [phase, pins, setup, scrollToX]);
 
-  // After marble lands, show reveal for 1s then go to answer phase
+  // After marble lands, show reveal for 1s then go to answer phase.
+  // Only transition to answer if we have a valid question; otherwise the
+  // postanswer phase (set in the landing code) will skip to the next marble.
   useEffect(() => {
     if (phase !== "reveal") return;
     timerRef.current = setTimeout(() => {
@@ -284,14 +325,17 @@ export default function MarbleGameFormat({
     };
   }, [phase]);
 
-  // If we land in a slot but can't build a valid question for it (e.g. the
-  // source word has no aspects besides the displayed one, or distractors can't
-  // be gathered without ambiguity), skip this marble and fire the next one.
+  // Skip-marble path: if we landed but couldn't build a valid question,
+  // we went straight to postanswer. After a brief pause, advance to the
+  // next marble (or finish).
   useEffect(() => {
-    if (phase !== "answer" || question !== null || landedSlotIdx === null) return;
+    if (phase !== "postanswer" || question !== null) return;
     if (completedRef.current) return;
     timerRef.current = setTimeout(() => {
+      setSelectedChoice(null);
+      setRevealCorrect(false);
       setLandedSlotIdx(null);
+      setQuestion(null);
       if (promptIdx + 1 >= totalMarbles) {
         if (!completedRef.current) {
           completedRef.current = true;
@@ -302,45 +346,11 @@ export default function MarbleGameFormat({
         setPromptIdx(promptIdx + 1);
         setPhase("reslot");
       }
-    }, 600);
+    }, 1000);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [phase, question, landedSlotIdx, promptIdx, totalMarbles, onDone]);
-
-  // When the marble lands, build a question for the landed slot.
-  // The question asks the user to identify ANY aspect (besides def/expl) of
-  // the source word of the landed slot — not just the aspect that was
-  // displayed. This makes the question non-trivial and exercises real
-  // recall of the word's full aspect set.
-  const question = useMemo<{ aspect: Aspect; choices: string[]; correctValue: string } | null>(() => {
-    if (!setup || landedSlotIdx === null) return null;
-    const optionAspect = setup.slotItems[landedSlotIdx];
-    const targetWord = setup.sources[landedSlotIdx];
-    const questionAspect = buildGameQuestion(
-      targetWord,
-      optionAspect,
-      setup.sources
-    );
-    if (!questionAspect) return null;
-    const correctValue = questionAspect.value;
-    // Distractors: any aspect value (besides def/expl) from OTHER source
-    // words, ensuring no duplicates with the correct value or each other.
-    const distractorPool: string[] = [];
-    for (let i = 0; i < setup.sources.length; i++) {
-      if (i === landedSlotIdx) continue;
-      const w = setup.sources[i];
-      for (const a of getAspects(w)) {
-        if (a.type === "definition" || a.type === "explanation") continue;
-        if (a.value.trim().length === 0) continue;
-        if (a.value !== correctValue) distractorPool.push(a.value);
-      }
-    }
-    const distractors = shuffle(Array.from(new Set(distractorPool))).slice(0, 3);
-    if (distractors.length < 3) return null; // not enough distractors
-    const choices = shuffle([correctValue, ...distractors]);
-    return { aspect: questionAspect, choices, correctValue };
-  }, [setup, landedSlotIdx]);
+  }, [phase, question, promptIdx, totalMarbles, onDone]);
 
   const handleAnswer = useCallback(
     (choice: string) => {
@@ -363,6 +373,7 @@ export default function MarbleGameFormat({
           setSelectedChoice(null);
           setRevealCorrect(false);
           setLandedSlotIdx(null);
+          setQuestion(null);
           if (promptIdx + 1 >= totalMarbles) {
             if (!completedRef.current) {
               completedRef.current = true;

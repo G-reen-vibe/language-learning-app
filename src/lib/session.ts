@@ -183,32 +183,39 @@ export function isFormatServable(lesson: Lesson, fmt: FormatType): boolean {
     return ok;
   }
   if (fmt === "cardGame") {
-    // Card game uses pickShellItemsMulti (sources from multiple words).
-    // Need at least 4 distinct shell aspect values across ALL eligible words.
-    const shellValues = new Set<string>();
-    for (const { word } of eligible) {
-      for (const a of getAspects(word)) {
-        if (a.type === "word" || a.type === "alt1" || a.type === "alt2" ||
-            a.type === "alt3" || a.type === "synonym" || a.type === "translation") {
-          shellValues.add(a.value);
-        }
-      }
-    }
-    return shellValues.size >= 4;
+    // Card game uses pickGameItems (one aspect per word). The number of cards
+    // equals the number of eligible words that have at least one shell aspect.
+    // Need at least 4 such words (matches CardGameFormat's min items check).
+    const wordsWithShellAspect = eligible.filter(({ word }) =>
+      getAspects(word).some(
+        (a) =>
+          a.type === "word" ||
+          a.type === "alt1" ||
+          a.type === "alt2" ||
+          a.type === "alt3" ||
+          a.type === "synonym" ||
+          a.type === "translation"
+      )
+    );
+    return wordsWithShellAspect.length >= 4;
   }
   if (fmt === "marbleGame") {
-    // Marble game uses pickShellItemsMulti (sources from multiple words).
-    // Need at least 6 distinct shell aspect values across ALL eligible words.
-    const shellValues = new Set<string>();
-    for (const { word } of eligible) {
-      for (const a of getAspects(word)) {
-        if (a.type === "word" || a.type === "alt1" || a.type === "alt2" ||
-            a.type === "alt3" || a.type === "synonym" || a.type === "translation") {
-          shellValues.add(a.value);
-        }
-      }
-    }
-    return shellValues.size >= 6;
+    // Marble game uses pickGameItems (one aspect per word). The number of
+    // slots equals the number of eligible words that have at least one shell
+    // aspect. Need at least 6 such words (matches MarbleGameFormat's min items
+    // check).
+    const wordsWithShellAspect = eligible.filter(({ word }) =>
+      getAspects(word).some(
+        (a) =>
+          a.type === "word" ||
+          a.type === "alt1" ||
+          a.type === "alt2" ||
+          a.type === "alt3" ||
+          a.type === "synonym" ||
+          a.type === "translation"
+      )
+    );
+    return wordsWithShellAspect.length >= 6;
   }
   return true;
 }
